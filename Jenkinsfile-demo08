@@ -1,0 +1,49 @@
+pipeline {
+  agent any     // could be any such as master or slave. currently no slave, so it would be master
+  
+  environment {     // It is global, but it can be inside stage and make it local.
+    DOCKER_TAG = getDockerTag()
+  }
+  stages {
+    stage ('Build Docker Image') {
+      steps {
+        // sh 'docker build -t bc0071/nodeapp:v1'
+        // sh "docker build -t bc0071/nodeapp:${DOCKER_TAG} ." // . at the end of code, failed. Check!
+        sh "docker build . -t bc0071/nodeapp:${DOCKER_TAG}"
+      }
+    }
+    stage ('DockerHub Push') {
+      // sh "docker login -u bc0071 -p <passwd>"
+      steps {
+        withCredentials([string(credentialsId: 'dockerhub_bc0071', variable: 'dockerhubPasswd')]) {
+          // some block
+          sh "docker login -u bc0071 -p ${dockerhubPasswd}"
+          sh "docker push bc0071/nodeapp:${DOCKER_TAG}"
+        }
+      }
+    }
+    stage ('Deploy to k8s') {
+      steps {
+        sh "chmod +x changeTag.sh"
+        sh "./changeTag.sh ${DOCKER_TAG}"
+        sshagent(['k8s-machine']) {
+          sh "scp -o StrictHostKeyChecking=no services.yml node-app-pod.yml vagrant@<k8s-machine-host>:/home/vagrant/"
+          script {
+            try {
+              sh "ssh vagrant@<k8s-machine-host> kubectl apply -f ."
+            } catch(error) {
+              sh "ssh vagrant@<k8s-machine-host> kubectl create -f ."
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// make TAG dynamic
+def getDockerTag() {
+  //def tag = sh script: 'git rev-parse HEAD' // get latest commit ID
+  def tag = sh script: 'git rev-parse HEAD', returnStdout: true
+  return tag
+}
